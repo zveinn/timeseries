@@ -73,7 +73,7 @@ func Test_StoreAndGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expectedPath := filepath.Join(tmpDir, "2024", "06", "15", "10", "30.cbor")
+	expectedPath := filepath.Join(tmpDir, "2024", "06", "15", "10.cbor")
 	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
 		t.Fatalf("expected file at %s", expectedPath)
 	}
@@ -173,26 +173,28 @@ func Test_Delete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	baseTime := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	baseTime := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
 
+	// Store items in 3 different hours
 	for i := 0; i < 3; i++ {
 		data := testStruct{
 			SomeString: "test",
 			SomeInt:    i,
 			SomeFloat:  float64(i),
 		}
-		err = c.Store(baseTime.Add(time.Duration(i)*time.Minute), data)
+		err = c.Store(baseTime.Add(time.Duration(i)*time.Hour), data)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	err = c.Delete(baseTime, baseTime.Add(2*time.Minute))
+	// Delete the first 2 hours (10:00 and 11:00)
+	err = c.Delete(baseTime, baseTime.Add(2*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	results, err := c.Get(baseTime.Add(-time.Minute), baseTime.Add(5*time.Minute))
+	results, err := c.Get(baseTime.Add(-time.Hour), baseTime.Add(5*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -895,12 +897,12 @@ func Test_FindUncachedDataOnDisk(t *testing.T) {
 
 	// Create a new client WITHOUT building the cache (empty cache)
 	c2 := &Client[testStruct]{
-		Cache: make(map[int]*[12][31][24][60]struct{}),
+		Cache: make(map[int]*[12][31][24]struct{}),
 		Opts:  Options{Path: dir},
 	}
 
 	// Verify cache is empty
-	if c2.getCache(baseTime.Truncate(time.Minute)) {
+	if c2.getCache(baseTime.Truncate(time.Hour)) {
 		t.Fatal("expected cache to be empty")
 	}
 
@@ -919,7 +921,7 @@ func Test_FindUncachedDataOnDisk(t *testing.T) {
 	}
 
 	// Cache should now be populated after the Find
-	if !c2.getCache(baseTime.Truncate(time.Minute)) {
+	if !c2.getCache(baseTime.Truncate(time.Hour)) {
 		t.Fatal("expected cache to be populated after Find")
 	}
 }

@@ -25,14 +25,14 @@ type Entry[T any] struct {
 }
 
 type Client[T any] struct {
-	Cache map[int]*[12][31][24][60]struct{}
+	Cache map[int]*[12][31][24]struct{}
 	Opts  Options
 }
 
 func Init[T any](opts Options) (client *Client[T], err error) {
 	client = new(Client[T])
 	client.Opts = opts
-	client.Cache = make(map[int]*[12][31][24][60]struct{})
+	client.Cache = make(map[int]*[12][31][24]struct{})
 
 	if opts.Path != "" {
 		err = client.buildCache()
@@ -77,19 +77,19 @@ func (c *Client[T]) buildCache() error {
 }
 
 func (c *Client[T]) setCache(t time.Time) {
-	y, m, d, h, min := t.Year(), int(t.Month())-1, t.Day()-1, t.Hour(), t.Minute()
+	y, m, d, h := t.Year(), int(t.Month())-1, t.Day()-1, t.Hour()
 	if c.Cache[y] == nil {
-		c.Cache[y] = new([12][31][24][60]struct{})
+		c.Cache[y] = new([12][31][24]struct{})
 	}
-	c.Cache[y][m][d][h][min] = struct{}{}
+	c.Cache[y][m][d][h] = struct{}{}
 }
 
 func (c *Client[T]) getCache(t time.Time) bool {
-	y, m, d, h, min := t.Year(), int(t.Month())-1, t.Day()-1, t.Hour(), t.Minute()
+	y, m, d, h := t.Year(), int(t.Month())-1, t.Day()-1, t.Hour()
 	if c.Cache[y] == nil {
 		return false
 	}
-	return c.Cache[y][m][d][h][min] == struct{}{}
+	return c.Cache[y][m][d][h] == struct{}{}
 }
 
 func (c *Client[T]) parsePathToTime(path string) (time.Time, error) {
@@ -109,7 +109,7 @@ func (c *Client[T]) parsePathToTime(path string) (time.Time, error) {
 		}
 	}
 
-	if len(parts) != 4 {
+	if len(parts) != 3 {
 		return time.Time{}, errors.New("invalid path structure")
 	}
 
@@ -128,19 +128,14 @@ func (c *Client[T]) parsePathToTime(path string) (time.Time, error) {
 		return time.Time{}, err
 	}
 
-	hour, err := strconv.Atoi(parts[3])
-	if err != nil {
-		return time.Time{}, err
-	}
-
 	filename := filepath.Base(path)
-	minuteStr := filename[:len(filename)-5]
-	minute, err := strconv.Atoi(minuteStr)
+	hourStr := filename[:len(filename)-5]
+	hour, err := strconv.Atoi(hourStr)
 	if err != nil {
 		return time.Time{}, err
 	}
 
-	return time.Date(year, time.Month(month), day, hour, minute, 0, 0, time.UTC), nil
+	return time.Date(year, time.Month(month), day, hour, 0, 0, 0, time.UTC), nil
 }
 
 func (c *Client[T]) timeToPath(t time.Time) string {
@@ -149,13 +144,12 @@ func (c *Client[T]) timeToPath(t time.Time) string {
 		fmt.Sprintf("%04d", t.Year()),
 		fmt.Sprintf("%02d", int(t.Month())),
 		fmt.Sprintf("%02d", t.Day()),
-		fmt.Sprintf("%02d", t.Hour()),
-		fmt.Sprintf("%02d.cbor", t.Minute()),
+		fmt.Sprintf("%02d.cbor", t.Hour()),
 	)
 }
 
 func (c *Client[T]) Store(date time.Time, data T) error {
-	truncated := date.Truncate(time.Minute)
+	truncated := date.Truncate(time.Hour)
 	path := c.timeToPath(truncated)
 
 	dir := filepath.Dir(path)
@@ -205,10 +199,10 @@ func (c *Client[T]) Get(from time.Time, to time.Time) ([]*T, error) {
 }
 
 func (c *Client[T]) Find(from time.Time, to time.Time, fn func(t time.Time, data T)) error {
-	fromTrunc := from.Truncate(time.Minute)
-	toTrunc := to.Truncate(time.Minute).Add(time.Minute)
+	fromTrunc := from.Truncate(time.Hour)
+	toTrunc := to.Truncate(time.Hour).Add(time.Hour)
 
-	for current := fromTrunc; current.Before(toTrunc); current = current.Add(time.Minute) {
+	for current := fromTrunc; current.Before(toTrunc); current = current.Add(time.Hour) {
 		path := c.timeToPath(current)
 
 		if !c.getCache(current) {
@@ -260,10 +254,10 @@ func (c *Client[T]) readFile(path string, from time.Time, to time.Time, fn func(
 }
 
 func (c *Client[T]) Delete(from time.Time, to time.Time) error {
-	fromTrunc := from.Truncate(time.Minute)
-	toTrunc := to.Truncate(time.Minute)
+	fromTrunc := from.Truncate(time.Hour)
+	toTrunc := to.Truncate(time.Hour)
 
-	for current := fromTrunc; current.Before(toTrunc); current = current.Add(time.Minute) {
+	for current := fromTrunc; current.Before(toTrunc); current = current.Add(time.Hour) {
 		if !c.getCache(current) {
 			continue
 		}
