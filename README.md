@@ -2,6 +2,9 @@
 
 A simple Go library for storing timeseries data on the filesystem. Data is CBOR encoded and organized by time into a directory structure like `year/month/day/hour.cbor`. Each hour file can hold multiple entries.
 
+## Disclaimer
+This is just a fun litle time series storage, not really meant for production use.
+
 ## Install
 
 ```
