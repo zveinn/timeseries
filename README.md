@@ -61,3 +61,45 @@ func main() {
 - `Get(from, to time.Time) ([]*T, error)` - get all data in a time range
 - `Find(from, to time.Time, fn func(time.Time, T)) error` - iterate over data in a time range
 - `Delete(from, to time.Time) error` - delete all minute files in a time range
+
+## Benchmarks
+
+Benchmarks run with 100,000 items (1 item per minute, ~69 days of data). Each Find benchmark searches for an item at the end of its time window.
+
+```
+goos: linux
+goarch: amd64
+cpu: AMD Ryzen 7 7840HS w/ Radeon 780M Graphics
+```
+
+### Core Operations
+
+| Operation | Time | Allocs | Description |
+|-----------|------|--------|-------------|
+| Store | 1.43s | 1.4M | Store 100,000 items |
+| Get | 970ms | 1.6M | Retrieve all 100,000 items |
+| Delete | 1.80s | 7.7M | Delete all 100,000 items |
+
+### Find by Time Window
+
+| Window | Items | Time | Allocs |
+|--------|-------|------|--------|
+| 1 minute | 1 | 89µs | 20 |
+| 1 hour | 60 | 699µs | 964 |
+| 1 day | 1,440 | 13ms | 23k |
+| 1 week | 10,080 | 93ms | 161k |
+| 1 month | 43,200 | 400ms | 691k |
+| Full (69 days) | 100,000 | 931ms | 1.6M |
+
+### Other
+
+| Operation | Time | Allocs | Description |
+|-----------|------|--------|-------------|
+| GetSubset | 97ms | 160k | Retrieve 10% of data (10,000 items) |
+| CacheLookup | 4ms | 0 | 100,000 in-memory cache lookups |
+| CacheInit | 316ms | 1.2M | Rebuild cache from 100,000 files |
+
+Run benchmarks with:
+```
+go test -bench=. -benchmem
+```
