@@ -71,12 +71,12 @@ func (c *Client[T]) buildCache() error {
 			return nil
 		}
 
-		c.setCache(t, true)
+		c.setCache(t)
 		return nil
 	})
 }
 
-func (c *Client[T]) setCache(t time.Time, exists bool) {
+func (c *Client[T]) setCache(t time.Time) {
 	y, m, d, h, min := t.Year(), int(t.Month())-1, t.Day()-1, t.Hour(), t.Minute()
 	if c.Cache[y] == nil {
 		c.Cache[y] = new([12][31][24][60]struct{})
@@ -188,7 +188,7 @@ func (c *Client[T]) Store(date time.Time, data T) error {
 		return errors.New("write verification failed: bytes written != encoded length")
 	}
 
-	c.setCache(truncated, true)
+	c.setCache(truncated)
 
 	return nil
 }
@@ -266,7 +266,7 @@ func (c *Client[T]) Delete(from time.Time, to time.Time) error {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
-		c.setCache(current, false)
+		c.setCache(current)
 		c.cleanEmptyDirs(filepath.Dir(path))
 	}
 
