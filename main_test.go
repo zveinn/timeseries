@@ -209,10 +209,6 @@ func Test_CachePopulationOnInit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(c2.Cache) != 3 {
-		t.Fatalf("expected 3 cache entries, got %d", len(c2.Cache))
-	}
-
 	results, err := c2.Get(baseTime.Add(-time.Minute), baseTime.Add(5*time.Minute))
 	if err != nil {
 		t.Fatal(err)

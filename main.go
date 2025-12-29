@@ -1,14 +1,12 @@
 package timeseries
 
 import (
-	"crypto/md5"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"time"
 
@@ -26,19 +24,15 @@ type Entry[T any] struct {
 	Data T
 }
 
-type CacheEntry struct {
-	Time time.Time
-	Path string
-}
-
 type Client[T any] struct {
-	Cache []CacheEntry
+	Cache map[int]*[12][31][24][60]struct{}
 	Opts  Options
 }
 
 func Init[T any](opts Options) (client *Client[T], err error) {
 	client = new(Client[T])
 	client.Opts = opts
+	client.Cache = make(map[int]*[12][31][24][60]struct{})
 
 	if opts.Path != "" {
 		err = client.buildCache()
@@ -55,13 +49,11 @@ func Init[T any](opts Options) (client *Client[T], err error) {
 }
 
 func (c *Client[T]) buildCache() error {
-	c.Cache = make([]CacheEntry, 0)
-
 	if _, err := os.Stat(c.Opts.Path); os.IsNotExist(err) {
 		return nil
 	}
 
-	err := filepath.Walk(c.Opts.Path, func(path string, info os.FileInfo, err error) error {
+	return filepath.Walk(c.Opts.Path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -79,23 +71,25 @@ func (c *Client[T]) buildCache() error {
 			return nil
 		}
 
-		c.Cache = append(c.Cache, CacheEntry{
-			Time: t,
-			Path: path,
-		})
-
+		c.setCache(t, true)
 		return nil
 	})
+}
 
-	if err != nil {
-		return err
+func (c *Client[T]) setCache(t time.Time, exists bool) {
+	y, m, d, h, min := t.Year(), int(t.Month())-1, t.Day()-1, t.Hour(), t.Minute()
+	if c.Cache[y] == nil {
+		c.Cache[y] = new([12][31][24][60]struct{})
 	}
+	c.Cache[y][m][d][h][min] = struct{}{}
+}
 
-	sort.Slice(c.Cache, func(i, j int) bool {
-		return c.Cache[i].Time.Before(c.Cache[j].Time)
-	})
-
-	return nil
+func (c *Client[T]) getCache(t time.Time) bool {
+	y, m, d, h, min := t.Year(), int(t.Month())-1, t.Day()-1, t.Hour(), t.Minute()
+	if c.Cache[y] == nil {
+		return false
+	}
+	return c.Cache[y][m][d][h][min] == struct{}{}
 }
 
 func (c *Client[T]) parsePathToTime(path string) (time.Time, error) {
@@ -165,7 +159,7 @@ func (c *Client[T]) Store(date time.Time, data T) error {
 	path := c.timeToPath(truncated)
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
@@ -174,82 +168,29 @@ func (c *Client[T]) Store(date time.Time, data T) error {
 		Data: data,
 	}
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	encoded, err := cbor.Marshal(entry)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	startPos, err := f.Seek(0, io.SeekEnd)
+	n, err := f.Write(encoded)
 	if err != nil {
 		return err
 	}
 
-	hasher := md5.New()
-	writer := io.MultiWriter(f, hasher)
-
-	enc := cbor.NewEncoder(writer)
-	if err := enc.Encode(entry); err != nil {
-		return err
+	if n != len(encoded) {
+		return errors.New("write verification failed: bytes written != encoded length")
 	}
 
-	expectedHash := hasher.Sum(nil)
-
-	if err := f.Sync(); err != nil {
-		return err
-	}
-
-	verifyFile, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer verifyFile.Close()
-
-	if _, err := verifyFile.Seek(startPos, io.SeekStart); err != nil {
-		return err
-	}
-
-	verifyHasher := md5.New()
-	if _, err := io.Copy(verifyHasher, verifyFile); err != nil {
-		return err
-	}
-
-	actualHash := verifyHasher.Sum(nil)
-	for i := range expectedHash {
-		if expectedHash[i] != actualHash[i] {
-			return errors.New("md5 verification failed after write")
-		}
-	}
-
-	c.updateCache(truncated, path)
+	c.setCache(truncated, true)
 
 	return nil
-}
-
-func (c *Client[T]) updateCache(t time.Time, path string) {
-	for _, entry := range c.Cache {
-		if entry.Time.Equal(t) {
-			return
-		}
-	}
-
-	c.Cache = append(c.Cache, CacheEntry{
-		Time: t,
-		Path: path,
-	})
-
-	sort.Slice(c.Cache, func(i, j int) bool {
-		return c.Cache[i].Time.Before(c.Cache[j].Time)
-	})
-}
-
-func (c *Client[T]) removeFromCache(t time.Time) {
-	for i, entry := range c.Cache {
-		if entry.Time.Equal(t) {
-			c.Cache = append(c.Cache[:i], c.Cache[i+1:]...)
-			return
-		}
-	}
 }
 
 func (c *Client[T]) Get(from time.Time, to time.Time) ([]*T, error) {
@@ -267,15 +208,13 @@ func (c *Client[T]) Find(from time.Time, to time.Time, fn func(t time.Time, data
 	fromTrunc := from.Truncate(time.Minute)
 	toTrunc := to.Truncate(time.Minute).Add(time.Minute)
 
-	for _, entry := range c.Cache {
-		if entry.Time.Before(fromTrunc) {
+	for current := fromTrunc; current.Before(toTrunc); current = current.Add(time.Minute) {
+		if !c.getCache(current) {
 			continue
 		}
-		if entry.Time.After(toTrunc) || entry.Time.Equal(toTrunc) {
-			break
-		}
 
-		if err := c.readFile(entry.Path, from, to, fn); err != nil {
+		path := c.timeToPath(current)
+		if err := c.readFile(path, from, to, fn); err != nil {
 			return err
 		}
 	}
@@ -318,26 +257,17 @@ func (c *Client[T]) Delete(from time.Time, to time.Time) error {
 	fromTrunc := from.Truncate(time.Minute)
 	toTrunc := to.Truncate(time.Minute)
 
-	var toRemove []CacheEntry
-
-	for _, entry := range c.Cache {
-		if entry.Time.Before(fromTrunc) {
+	for current := fromTrunc; current.Before(toTrunc); current = current.Add(time.Minute) {
+		if !c.getCache(current) {
 			continue
 		}
-		if entry.Time.After(toTrunc) || entry.Time.Equal(toTrunc) {
-			break
-		}
-		toRemove = append(toRemove, entry)
-	}
 
-	for _, entry := range toRemove {
-		if err := os.Remove(entry.Path); err != nil && !os.IsNotExist(err) {
+		path := c.timeToPath(current)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
-		c.removeFromCache(entry.Time)
-
-		dir := filepath.Dir(entry.Path)
-		c.cleanEmptyDirs(dir)
+		c.setCache(current, false)
+		c.cleanEmptyDirs(filepath.Dir(path))
 	}
 
 	return nil
