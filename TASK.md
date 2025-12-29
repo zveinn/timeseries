@@ -6,7 +6,7 @@ STORAGE PATH PATTERN:
 API:
  - timeseries.Store[T any](date time.Time, data T) error
  - timeseries.Get[T any](from time.Time, to time.Time) (d []*T, err error)
- - timeseries.Find[T any](from time.Time, to time.Time, func()) error
+ - timeseries.Find[T any](from time.Time, to time.Time, func(t time.Time, object T)) error
    - func() is called for every object we iterate over
  - timeseries.Delete(from time.Time, to timeTime) error
  - timeseries.Init[T any](opt *Options) (client *Client)
