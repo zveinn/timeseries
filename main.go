@@ -209,11 +209,17 @@ func (c *Client[T]) Find(from time.Time, to time.Time, fn func(t time.Time, data
 	toTrunc := to.Truncate(time.Minute).Add(time.Minute)
 
 	for current := fromTrunc; current.Before(toTrunc); current = current.Add(time.Minute) {
+		path := c.timeToPath(current)
+
 		if !c.getCache(current) {
-			continue
+			// Cache miss - check if file exists on disk
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				continue
+			}
+			// File exists but wasn't cached, update cache
+			c.setCache(current)
 		}
 
-		path := c.timeToPath(current)
 		if err := c.readFile(path, from, to, fn); err != nil {
 			return err
 		}

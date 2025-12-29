@@ -873,3 +873,53 @@ func Test_ConcurrentMinuteWrites(t *testing.T) {
 		t.Fatalf("expected 100 results in same minute, got %d", len(results))
 	}
 }
+
+func Test_FindUncachedDataOnDisk(t *testing.T) {
+	dir := t.TempDir()
+
+	// First, create a client and store some data
+	c1, err := Init[testStruct](Options{Path: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baseTime := time.Date(2024, 6, 15, 10, 30, 15, 0, time.UTC)
+	err = c1.Store(baseTime, testStruct{
+		SomeString: "test",
+		SomeInt:    42,
+		SomeFloat:  3.14,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a new client WITHOUT building the cache (empty cache)
+	c2 := &Client[testStruct]{
+		Cache: make(map[int]*[12][31][24][60]struct{}),
+		Opts:  Options{Path: dir},
+	}
+
+	// Verify cache is empty
+	if c2.getCache(baseTime.Truncate(time.Minute)) {
+		t.Fatal("expected cache to be empty")
+	}
+
+	// Find should still locate the data on disk
+	results, err := c2.Get(baseTime, baseTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result from disk lookup, got %d", len(results))
+	}
+
+	if results[0].SomeInt != 42 {
+		t.Fatalf("expected SomeInt=42, got %d", results[0].SomeInt)
+	}
+
+	// Cache should now be populated after the Find
+	if !c2.getCache(baseTime.Truncate(time.Minute)) {
+		t.Fatal("expected cache to be populated after Find")
+	}
+}
