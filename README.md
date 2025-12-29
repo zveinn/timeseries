@@ -1,6 +1,6 @@
 # timeseries
 
-A simple Go library for storing timeseries data on the filesystem. Data is CBOR encoded and organized by time into a directory structure like `year/month/day/hour/minute.cbor`. Each minute file can hold multiple entries.
+A simple Go library for storing timeseries data on the filesystem. Data is CBOR encoded and organized by time into a directory structure like `year/month/day/hour.cbor`. Each hour file can hold multiple entries.
 
 ## Install
 
@@ -60,44 +60,29 @@ func main() {
 - `Store(date time.Time, data T) error` - store data at a given time
 - `Get(from, to time.Time) ([]*T, error)` - get all data in a time range
 - `Find(from, to time.Time, fn func(time.Time, T)) error` - iterate over data in a time range
-- `Delete(from, to time.Time) error` - delete all minute files in a time range
+- `Delete(from, to time.Time) error` - delete all hour files in a time range
 
 ## Benchmarks
 
-Benchmarks run with 100,000 items (1 item per minute, ~69 days of data). Each Find benchmark searches for an item at the end of its time window.
+Benchmarks run with 100,000 items (1 item per minute, ~69 days of data stored across ~1,667 hourly files).
 
 ```
 goos: linux
 goarch: amd64
+pkg: github.com/zveinn/timeseries
 cpu: AMD Ryzen 7 7840HS w/ Radeon 780M Graphics
+BenchmarkA_Store-16            	       1	1022884720 ns/op	64124800 B/op	 1300513 allocs/op
+BenchmarkB_Get-16              	      15	  79179142 ns/op	22050478 B/op	  420072 allocs/op
+BenchmarkC1_Find_1Minute-16    	   29797	     40341 ns/op	    8637 B/op	     193 allocs/op
+BenchmarkC2_Find_1Hour-16      	   28078	     41584 ns/op	   10527 B/op	     252 allocs/op
+BenchmarkC3_Find_1Day-16       	    1152	   1025923 ns/op	  252657 B/op	    6048 allocs/op
+BenchmarkC4_Find_1Week-16      	     168	   7089725 ns/op	 1768585 B/op	   42337 allocs/op
+BenchmarkC5_Find_1Month-16     	      38	  30561462 ns/op	 7579674 B/op	  181446 allocs/op
+BenchmarkC6_Find_Full-16       	      15	  70822510 ns/op	17546298 B/op	  420019 allocs/op
+BenchmarkD_GetSubset-16        	     159	   7448360 ns/op	 2068287 B/op	   42084 allocs/op
+BenchmarkE_CacheLookup-16      	     376	   3143373 ns/op	       0 B/op	       0 allocs/op
+BenchmarkF_CacheInit-16        	     223	   5185070 ns/op	  925247 B/op	   17713 allocs/op
 ```
-
-### Core Operations
-
-| Operation | Time | Allocs | Description |
-|-----------|------|--------|-------------|
-| Store | 1.43s | 1.4M | Store 100,000 items |
-| Get | 970ms | 1.6M | Retrieve all 100,000 items |
-| Delete | 1.80s | 7.7M | Delete all 100,000 items |
-
-### Find by Time Window
-
-| Window | Items | Time | Allocs |
-|--------|-------|------|--------|
-| 1 minute | 1 | 89µs | 20 |
-| 1 hour | 60 | 699µs | 964 |
-| 1 day | 1,440 | 13ms | 23k |
-| 1 week | 10,080 | 93ms | 161k |
-| 1 month | 43,200 | 400ms | 691k |
-| Full (69 days) | 100,000 | 931ms | 1.6M |
-
-### Other
-
-| Operation | Time | Allocs | Description |
-|-----------|------|--------|-------------|
-| GetSubset | 97ms | 160k | Retrieve 10% of data (10,000 items) |
-| CacheLookup | 4ms | 0 | 100,000 in-memory cache lookups |
-| CacheInit | 316ms | 1.2M | Rebuild cache from 100,000 files |
 
 Run benchmarks with:
 ```
