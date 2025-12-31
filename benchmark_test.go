@@ -93,10 +93,11 @@ func BenchmarkC1_Find_1Minute(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var found *benchStruct
-		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) {
+		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) bool {
 			if data.ID == targetID {
 				found = &data
 			}
+			return true
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -121,10 +122,11 @@ func BenchmarkC2_Find_1Hour(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var found *benchStruct
-		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) {
+		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) bool {
 			if data.ID == targetID {
 				found = &data
 			}
+			return true
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -149,10 +151,11 @@ func BenchmarkC3_Find_1Day(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var found *benchStruct
-		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) {
+		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) bool {
 			if data.ID == targetID {
 				found = &data
 			}
+			return true
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -177,10 +180,11 @@ func BenchmarkC4_Find_1Week(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var found *benchStruct
-		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) {
+		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) bool {
 			if data.ID == targetID {
 				found = &data
 			}
+			return true
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -205,10 +209,11 @@ func BenchmarkC5_Find_1Month(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var found *benchStruct
-		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) {
+		err := benchClient.Find(benchBase, windowEnd, func(t time.Time, data benchStruct) bool {
 			if data.ID == targetID {
 				found = &data
 			}
+			return true
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -231,10 +236,11 @@ func BenchmarkC6_Find_Full(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var found *benchStruct
-		err := benchClient.Find(benchBase, benchEndTime, func(t time.Time, data benchStruct) {
+		err := benchClient.Find(benchBase, benchEndTime, func(t time.Time, data benchStruct) bool {
 			if data.ID == targetID {
 				found = &data
 			}
+			return true
 		})
 		if err != nil {
 			b.Fatal(err)

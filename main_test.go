@@ -151,8 +151,9 @@ func Test_Find(t *testing.T) {
 	}
 
 	count := 0
-	err = c.Find(baseTime.Add(-time.Minute), baseTime.Add(5*time.Minute), func(tm time.Time, data testStruct) {
+	err = c.Find(baseTime.Add(-time.Minute), baseTime.Add(5*time.Minute), func(tm time.Time, data testStruct) bool {
 		count++
+		return true
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -764,9 +765,10 @@ func Test_FindCallback(t *testing.T) {
 	var times []time.Time
 	var values []int
 
-	err = c.Find(baseTime, baseTime.Add(4*time.Minute), func(tm time.Time, data testStruct) {
+	err = c.Find(baseTime, baseTime.Add(4*time.Minute), func(tm time.Time, data testStruct) bool {
 		times = append(times, tm)
 		values = append(values, data.SomeInt)
+		return true
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -780,6 +782,91 @@ func Test_FindCallback(t *testing.T) {
 		if v != i {
 			t.Fatalf("expected value %d at index %d, got %d", i, i, v)
 		}
+	}
+}
+
+func Test_FindEarlyStop(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	c, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baseTime := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	for i := 0; i < 10; i++ {
+		err = c.Store(baseTime.Add(time.Duration(i)*time.Minute), testStruct{
+			SomeString: "test",
+			SomeInt:    i,
+			SomeFloat:  float64(i),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Stop after finding 3 items
+	count := 0
+	err = c.Find(baseTime, baseTime.Add(9*time.Minute), func(tm time.Time, data testStruct) bool {
+		count++
+		return count < 3 // stop after 3rd item
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 3 {
+		t.Fatalf("expected 3 callbacks before stop, got %d", count)
+	}
+
+	// Stop immediately on first item
+	count = 0
+	err = c.Find(baseTime, baseTime.Add(9*time.Minute), func(tm time.Time, data testStruct) bool {
+		count++
+		return false // stop immediately
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 1 {
+		t.Fatalf("expected 1 callback before stop, got %d", count)
+	}
+}
+
+func Test_FindEarlyStopAcrossHours(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	c, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Store items across 3 different hours
+	baseTime := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		err = c.Store(baseTime.Add(time.Duration(i)*time.Hour), testStruct{
+			SomeString: "test",
+			SomeInt:    i,
+			SomeFloat:  float64(i),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Stop after finding item in second hour
+	count := 0
+	err = c.Find(baseTime, baseTime.Add(3*time.Hour), func(tm time.Time, data testStruct) bool {
+		count++
+		return data.SomeInt < 1 // stop after finding SomeInt == 1
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count != 2 {
+		t.Fatalf("expected 2 callbacks (stopping after 2nd hour), got %d", count)
 	}
 }
 

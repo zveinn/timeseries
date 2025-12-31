@@ -190,15 +190,16 @@ func (c *Client[T]) Store(date time.Time, data T) error {
 func (c *Client[T]) Get(from time.Time, to time.Time) ([]*T, error) {
 	var results []*T
 
-	err := c.Find(from, to, func(t time.Time, data T) {
+	err := c.Find(from, to, func(t time.Time, data T) bool {
 		dataCopy := data
 		results = append(results, &dataCopy)
+		return true
 	})
 
 	return results, err
 }
 
-func (c *Client[T]) Find(from time.Time, to time.Time, fn func(t time.Time, data T)) error {
+func (c *Client[T]) Find(from time.Time, to time.Time, fn func(t time.Time, data T) bool) error {
 	fromTrunc := from.Truncate(time.Hour)
 	toTrunc := to.Truncate(time.Hour).Add(time.Hour)
 
@@ -214,21 +215,25 @@ func (c *Client[T]) Find(from time.Time, to time.Time, fn func(t time.Time, data
 			c.setCache(current)
 		}
 
-		if err := c.readFile(path, from, to, fn); err != nil {
+		shouldContinue, err := c.readFile(path, from, to, fn)
+		if err != nil {
 			return err
+		}
+		if !shouldContinue {
+			return nil
 		}
 	}
 
 	return nil
 }
 
-func (c *Client[T]) readFile(path string, from time.Time, to time.Time, fn func(t time.Time, data T)) error {
+func (c *Client[T]) readFile(path string, from time.Time, to time.Time, fn func(t time.Time, data T) bool) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return true, nil
 		}
-		return err
+		return false, err
 	}
 	defer f.Close()
 
@@ -241,16 +246,18 @@ func (c *Client[T]) readFile(path string, from time.Time, to time.Time, fn func(
 			break
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		if (entry.Time.Equal(from) || entry.Time.After(from)) &&
 			(entry.Time.Equal(to) || entry.Time.Before(to)) {
-			fn(entry.Time, entry.Data)
+			if !fn(entry.Time, entry.Data) {
+				return false, nil
+			}
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 func (c *Client[T]) Delete(from time.Time, to time.Time) error {

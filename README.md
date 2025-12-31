@@ -44,12 +44,23 @@ func main() {
     to := time.Now()
     results, err := client.Get(from, to)
 
-    // iterate over data with a callback
+    // iterate over data with a callback (return true to continue, false to stop)
     var cpuMetrics []Metric
-    client.Find(from, to, func(t time.Time, data Metric) {
+    client.Find(from, to, func(t time.Time, data Metric) bool {
         if data.Name == "cpu" && data.Value > 50.0 {
             cpuMetrics = append(cpuMetrics, data)
         }
+        return true // continue iterating
+    })
+
+    // early stop: find first metric above threshold
+    var found *Metric
+    client.Find(from, to, func(t time.Time, data Metric) bool {
+        if data.Value > 90.0 {
+            found = &data
+            return false // stop iteration
+        }
+        return true
     })
 
     // delete data in a time range
@@ -62,7 +73,7 @@ func main() {
 - `Init[T any](opts Options) (*Client[T], error)` - create a new client, walks the directory to build a cache of existing files
 - `Store(date time.Time, data T) error` - store data at a given time
 - `Get(from, to time.Time) ([]*T, error)` - get all data in a time range
-- `Find(from, to time.Time, fn func(time.Time, T)) error` - iterate over data in a time range
+- `Find(from, to time.Time, fn func(time.Time, T) bool) error` - iterate over data in a time range; callback returns `true` to continue or `false` to stop early
 - `Delete(from, to time.Time) error` - delete all hour files in a time range
 
 ## Benchmarks
