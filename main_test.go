@@ -1,10 +1,16 @@
 package timeseries
 
 import (
+	"bytes"
+	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/fxamacker/cbor/v2"
 )
 
 type testStruct struct {
@@ -1010,5 +1016,368 @@ func Test_FindUncachedDataOnDisk(t *testing.T) {
 	// Cache should now be populated after the Find
 	if !c2.getCache(baseTime.Truncate(time.Hour)) {
 		t.Fatal("expected cache to be populated after Find")
+	}
+}
+
+func Test_CompressedRecords(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	c, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
+	payload := strings.Repeat("timeseries-payload-", 80)
+	const count = 20
+
+	for i := 0; i < count; i++ {
+		err = c.Store(base.Add(time.Duration(i)*time.Second), testStruct{
+			SomeString: payload,
+			SomeInt:    i,
+			SomeFloat:  float64(i),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	path := filepath.Join(tmpDir, "2024", "06", "15", "10.cbor")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(raw) < 2 || raw[0] != 0x1f || raw[1] != 0x8b {
+		t.Fatal("expected gzip compressed records")
+	}
+
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+
+	dec := cbor.NewDecoder(zr)
+	var decoded int
+	for {
+		var entry Entry[testStruct]
+		if err := dec.Decode(&entry); err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatal(err)
+		}
+		if entry.Data.SomeString != payload || entry.Data.SomeInt != decoded {
+			t.Fatalf("record %d mismatch", decoded)
+		}
+		decoded++
+	}
+	if decoded != count {
+		t.Fatalf("expected %d compressed records, got %d", count, decoded)
+	}
+
+	results, err := c.Get(base, base.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != count {
+		t.Fatalf("expected %d results, got %d", count, len(results))
+	}
+	if results[count-1].SomeInt != count-1 || results[count-1].SomeString != payload {
+		t.Fatal("round trip mismatch")
+	}
+}
+
+func gzipMembers(t *testing.T, raw []byte) [][]byte {
+	t.Helper()
+
+	r := bytes.NewReader(raw)
+	var members [][]byte
+	for r.Len() > 0 {
+		zr, err := gzip.NewReader(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		zr.Multistream(false)
+
+		body, err := io.ReadAll(zr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := zr.Close(); err != nil {
+			t.Fatal(err)
+		}
+		members = append(members, body)
+	}
+	return members
+}
+
+func Test_StoreAppendsIndependentGzipMembers(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	c, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2024, 6, 15, 10, 15, 0, 0, time.UTC)
+	path := filepath.Join(tmpDir, "2024", "06", "15", "10.cbor")
+
+	first := testStruct{SomeString: "first", SomeInt: 1, SomeFloat: 1.5}
+	if err := c.Store(base, first); err != nil {
+		t.Fatal(err)
+	}
+
+	afterFirst, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gzipMembers(t, afterFirst)) != 1 {
+		t.Fatal("expected one gzip member after the first store")
+	}
+
+	secondAt := base.Add(20 * time.Second)
+	second := testStruct{SomeString: "second", SomeInt: 2, SomeFloat: 2.5}
+	if err := c.Store(secondAt, second); err != nil {
+		t.Fatal(err)
+	}
+
+	afterSecond, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(afterSecond, afterFirst) {
+		t.Fatal("second store rewrote the existing compressed record")
+	}
+	if len(afterSecond) <= len(afterFirst) {
+		t.Fatal("second store did not append a compressed record")
+	}
+
+	members := gzipMembers(t, afterSecond)
+	if len(members) != 2 {
+		t.Fatalf("expected 2 gzip members, got %d", len(members))
+	}
+
+	want := []Entry[testStruct]{
+		{Time: base, Data: first},
+		{Time: secondAt, Data: second},
+	}
+	for i, member := range members {
+		var got Entry[testStruct]
+		if err := cbor.Unmarshal(member, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !got.Time.Equal(want[i].Time) || got.Data != want[i].Data {
+			t.Fatalf("member %d mismatch: got %+v", i, got)
+		}
+
+		var raw bytes.Buffer
+		if err := cbor.NewEncoder(&raw).Encode(want[i]); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(member, raw.Bytes()) {
+			t.Fatalf("member %d is not the plain cbor encoding", i)
+		}
+	}
+}
+
+func Test_CompressionShrinksRepetitivePayload(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	c, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Date(2024, 3, 2, 4, 5, 6, 0, time.UTC)
+	payload := strings.Repeat("aaaa-bbbb-cccc-dddd-", 100)
+	const count = 30
+
+	var raw bytes.Buffer
+	enc := cbor.NewEncoder(&raw)
+	for i := 0; i < count; i++ {
+		entry := Entry[testStruct]{
+			Time: base.Add(time.Duration(i) * time.Second),
+			Data: testStruct{SomeString: payload, SomeInt: i, SomeFloat: float64(i)},
+		}
+		if err := enc.Encode(entry); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Store(entry.Time, entry.Data); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	path := filepath.Join(tmpDir, "2024", "03", "02", "04.cbor")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() >= int64(raw.Len()) {
+		t.Fatalf("compressed file is %d bytes, raw cbor is %d bytes", info.Size(), raw.Len())
+	}
+
+	results, err := c.Get(base, base.Add(time.Duration(count-1)*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != count {
+		t.Fatalf("expected %d results, got %d", count, len(results))
+	}
+	if results[0].SomeString != payload || results[count-1].SomeInt != count-1 {
+		t.Fatal("compressed payload mismatch")
+	}
+}
+
+func Test_ReinitReadsCompressedFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	c1, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	storedAt := time.Date(2024, 11, 8, 21, 4, 30, 0, time.UTC)
+	data := testStruct{SomeString: "reload", SomeInt: 7, SomeFloat: 8.5}
+	if err := c1.Store(storedAt, data); err != nil {
+		t.Fatal(err)
+	}
+
+	c2, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []testStruct
+	var gotTimes []time.Time
+	err = c2.Find(storedAt, storedAt, func(tm time.Time, item testStruct) bool {
+		gotTimes = append(gotTimes, tm)
+		got = append(got, item)
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != data || !gotTimes[0].Equal(storedAt) {
+		t.Fatalf("reloaded compressed record mismatch: %+v at %v", got, gotTimes)
+	}
+}
+
+func Test_CompressedRecordsAcrossHours(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	c, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstAt := time.Date(2024, 6, 15, 10, 59, 0, 0, time.UTC)
+	secondAt := time.Date(2024, 6, 15, 11, 0, 0, 0, time.UTC)
+	if err := c.Store(firstAt, testStruct{SomeString: "h10", SomeInt: 10, SomeFloat: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store(secondAt, testStruct{SomeString: "h11", SomeInt: 11, SomeFloat: 11}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"10.cbor", "11.cbor"} {
+		raw, err := os.ReadFile(filepath.Join(tmpDir, "2024", "06", "15", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		members := gzipMembers(t, raw)
+		if len(members) != 1 {
+			t.Fatalf("%s: expected 1 gzip member, got %d", name, len(members))
+		}
+	}
+
+	results, err := c.Get(firstAt, secondAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].SomeInt != 10 || results[1].SomeInt != 11 {
+		t.Fatalf("cross-hour compressed read mismatch: %+v", results)
+	}
+}
+
+func Test_CorruptGzipFileReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "2024", "06", "15", "10.cbor")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("this is not gzip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	from := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
+	to := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	if _, err := c.Get(from, to); err == nil {
+		t.Fatal("expected corrupt gzip data to fail the read")
+	}
+}
+
+func Test_TruncatedGzipMemberReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	storedAt := time.Date(2024, 6, 15, 10, 5, 0, 0, time.UTC)
+	compressed, err := encodeCompressed(Entry[testStruct]{
+		Time: storedAt,
+		Data: testStruct{SomeString: strings.Repeat("truncated-", 40), SomeInt: 1, SomeFloat: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compressed) <= 18 {
+		t.Fatalf("compressed record is too short to truncate: %d", len(compressed))
+	}
+
+	path := filepath.Join(tmpDir, "2024", "06", "15", "10.cbor")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, compressed[:len(compressed)-8], 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := c.Get(storedAt, storedAt); err == nil {
+		t.Fatal("expected a truncated gzip member to fail the read")
+	}
+}
+
+func Test_EmptyHourFileReadsNothing(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "2024", "06", "15", "10.cbor")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := Init[testStruct](Options{Path: tmpDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	from := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
+	to := time.Date(2024, 6, 15, 10, 59, 0, 0, time.UTC)
+	results, err := c.Get(from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no records from an empty hour file, got %d", len(results))
 	}
 }

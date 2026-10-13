@@ -1,6 +1,8 @@
 package timeseries
 
 import (
+	"bytes"
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -162,7 +164,7 @@ func (c *Client[T]) Store(date time.Time, data T) error {
 		Data: data,
 	}
 
-	encoded, err := cbor.Marshal(entry)
+	compressed, err := encodeCompressed(entry)
 	if err != nil {
 		return err
 	}
@@ -173,18 +175,35 @@ func (c *Client[T]) Store(date time.Time, data T) error {
 	}
 	defer f.Close()
 
-	n, err := f.Write(encoded)
+	n, err := f.Write(compressed)
 	if err != nil {
 		return err
 	}
 
-	if n != len(encoded) {
+	if n != len(compressed) {
 		return errors.New("write verification failed: bytes written != encoded length")
 	}
 
 	c.setCache(truncated)
 
 	return nil
+}
+
+func encodeCompressed[T any](entry Entry[T]) ([]byte, error) {
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := cbor.NewEncoder(zw).Encode(entry); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
 
 func (c *Client[T]) Get(from time.Time, to time.Time) ([]*T, error) {
@@ -237,7 +256,16 @@ func (c *Client[T]) readFile(path string, from time.Time, to time.Time, fn func(
 	}
 	defer f.Close()
 
-	dec := cbor.NewDecoder(f)
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return true, nil
+		}
+		return false, err
+	}
+	defer zr.Close()
+
+	dec := cbor.NewDecoder(zr)
 
 	for {
 		var entry Entry[T]
